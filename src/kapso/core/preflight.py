@@ -28,12 +28,12 @@ import os
 import shutil
 import socket
 import subprocess
-import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from kapso.core.config import deep_merge, load_config
+from kapso.core.config import deep_merge, load_config, load_deployment_defaults
+from kapso.core.agent_manifest import load_agent_manifest
 from kapso.core.api_endpoint import (
     openai_compatible_options,
     validate_api_base_url,
@@ -45,16 +45,6 @@ from kapso.learning.bank_remote import bank_origin, bank_remote_error
 # defaults (Rule 1) — a user config that predates the `preflight:` block
 # inherits them rather than a duplicated literal.
 _PACKAGED_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
-
-# The coding-agent manifest already declares each agent's env_vars and
-# install_command — the fix lines below come from it rather than from a
-# second copy here. Read directly (a structural path, not a knob) so
-# preflight stays free of the execution stack's import weight; the other
-# reader is execution/coding_agents/factory.py.
-_AGENTS_YAML_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "execution" / "coding_agents" / "agents.yaml"
-)
 
 # Agent types that run as an external CLI binary. Everything else in the
 # manifest is a Python SDK adapter, whose requirement is the package its
@@ -109,6 +99,7 @@ class SessionSpec:
     origin: str
     auth_mode: str = "auto"
     agent_specific: Dict[str, Any] = field(default_factory=dict)
+    inference: bool = False
 
 
 class PreflightError(RuntimeError):
@@ -124,13 +115,6 @@ class PreflightError(RuntimeError):
 # =============================================================================
 # PROBES — each returns a plain bool, never raises for the "absent" case
 # =============================================================================
-
-def agent_manifest() -> Dict[str, Any]:
-    """The coding-agent manifest's `agents:` mapping."""
-    if not _AGENTS_YAML_PATH.is_file():
-        return {}
-    return (yaml.safe_load(_AGENTS_YAML_PATH.read_text()) or {}).get("agents", {})
-
 
 def default_preflight_config() -> Dict[str, Any]:
     """The platform `preflight:` block from the packaged config."""
@@ -209,7 +193,9 @@ def probe_model_access(cli_name: str, model: str) -> Tuple[bool, str]:
 # CONFIG -> SESSIONS
 # =============================================================================
 
-def session_specs(node: Any, prefix: str = "") -> List[SessionSpec]:
+def session_specs(
+    node: Any, prefix: str = "", *, inference: bool = False,
+) -> List[SessionSpec]:
     """Every coding-agent session the given config subtree can spawn.
 
     A model key (`model` or `*_model`) names the session; the CLI that runs
@@ -219,7 +205,7 @@ def session_specs(node: Any, prefix: str = "") -> List[SessionSpec]:
     on the claude CLI, everything else on codex). Embedding models are not
     sessions — their check is the OPENAI_API_KEY row.
     """
-    manifest = agent_manifest()
+    manifest = load_agent_manifest()["agents"]
     specs: List[SessionSpec] = []
 
     def resolve_cli(block: Dict[str, Any], key: str, model_name: str) -> str:
@@ -243,19 +229,37 @@ def session_specs(node: Any, prefix: str = "") -> List[SessionSpec]:
 
     def walk(current: Any, path: str) -> None:
         if isinstance(current, dict):
+            blocked = set()
+            if not inference:
+                for selector in ("cli", "type", "implementation_cli"):
+                    name = current.get(selector)
+                    info = manifest.get(name.lower(), {}) if isinstance(
+                        name, str
+                    ) else {}
+                    if info.get("inference_only"):
+                        blocked.add(name.lower())
+                        specs.append(SessionSpec(
+                            cli=name.lower(),
+                            model=str(info["default_model"]),
+                            origin=f"{path}.{selector} = {name}",
+                        ))
             for key, value in current.items():
                 child = f"{path}.{key}" if path else key
                 if key == "model" or key.endswith("_model"):
                     if isinstance(value, str) and value:
+                        cli = resolve_cli(current, key, value).lower()
+                        if cli in blocked:
+                            continue
                         specs.append(
                             SessionSpec(
-                                cli=resolve_cli(current, key, value),
+                                cli=cli,
                                 model=value,
                                 origin=f"{child} = {value}",
                                 auth_mode=resolve_auth_mode(current),
                                 agent_specific=dict(
                                     current.get("agent_specific") or {}
                                 ),
+                                inference=inference,
                             )
                         )
                     continue
@@ -286,12 +290,26 @@ def summarize_origins(specs: Sequence[SessionSpec]) -> str:
 def cli_requirements(specs: Sequence[SessionSpec]) -> List[Requirement]:
     """The binaries and credentials the given sessions need — one row per
     distinct requirement, listing every config key that wants it."""
-    manifest = agent_manifest()
+    manifest = load_agent_manifest()["agents"]
     by_cli: Dict[str, List[SessionSpec]] = {}
+    requirements: List[Requirement] = []
     for spec in specs:
+        if (
+            manifest.get(spec.cli.lower(), {}).get("inference_only")
+            and not spec.inference
+        ):
+            key = spec.origin.split(" = ")[0]
+            requirements.append(Requirement(
+                label=f"{key}: {spec.cli} is inference-only",
+                ok=False,
+                fix=f"select a coding-capable agent at {key}; "
+                    f"use {spec.cli} only under inference.default or "
+                    "inference.roles",
+                origin=spec.origin,
+            ))
+            continue
         by_cli.setdefault(spec.cli, []).append(spec)
 
-    requirements: List[Requirement] = []
     if not by_cli:
         return requirements
 
@@ -474,6 +492,7 @@ def research_requirements(config: Dict[str, Any]) -> List[Requirement]:
                 cli=str(spec.get("cli") or "codex"),
                 model=str(spec["model"]),
                 origin=f"inference.roles.research = {spec['model']}",
+                inference=True,
                 auth_mode=str(spec.get("auth_mode") or "auto"),
                 agent_specific=dict(spec.get("agent_specific") or {}),
             )
@@ -569,7 +588,9 @@ def evolve_requirements(
             inference.get("default") or {},
             (inference.get("roles") or {}).get(role) or {},
         )
-        specs.extend(session_specs(role_spec, f"inference.roles.{role}"))
+        specs.extend(session_specs(
+            role_spec, f"inference.roles.{role}", inference=True,
+        ))
 
     requirements = cli_requirements(specs)
     requirements.append(_git_requirement(
@@ -760,7 +781,7 @@ def deploy_requirements(
     config: Dict[str, Any],
     *,
     strategy: Optional[str] = None,
-    coding_agent: str = "claude_code",
+    coding_agent: Optional[str] = None,
 ) -> List[Requirement]:
     """`deploy()` adapts the solution with a coding-agent session, then
     hands it to the target's runner.
@@ -771,7 +792,11 @@ def deploy_requirements(
     going to run locally. `strategy=None` is the doctor's view, with no
     call in flight: it maps which targets this machine could serve.
     """
-    manifest = agent_manifest()
+    deployment = {
+        **load_deployment_defaults(), **(config.get("deployment") or {})
+    }
+    coding_agent = coding_agent or deployment["coding_agent"]
+    manifest = load_agent_manifest()["agents"]
     model = (manifest.get(coding_agent) or {}).get("default_model") or coding_agent
     requirements = cli_requirements([SessionSpec(
         cli=coding_agent,
@@ -926,6 +951,7 @@ def _specs_for(
                 cli=str(research_spec.get("cli") or "codex"),
                 model=str(research_spec["model"]),
                 origin=f"inference.roles.research = {research_spec['model']}",
+                inference=True,
             )] if research_spec.get("model") else []
         ),
         "learn_knowledge": session_specs(

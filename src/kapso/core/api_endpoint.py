@@ -1,22 +1,14 @@
 """Config-only API endpoints shared by clients and preflight."""
 
 from ipaddress import ip_address
-from pathlib import Path
 from urllib.parse import urlsplit
 
-from kapso.core.config import load_config
+from kapso.core.agent_manifest import load_agent_manifest
 
 
 def openai_compatible_options(overrides=None):
     """Resolve adapter options from their single home in agents.yaml."""
-    manifest = load_config(
-        str(
-            Path(__file__).resolve().parent.parent
-            / "execution"
-            / "coding_agents"
-            / "agents.yaml"
-        )
-    )
+    manifest = load_agent_manifest()
     defaults = manifest["agents"]["openai_compatible"]["agent_specific"]
     return {**defaults, **(overrides or {})}
 

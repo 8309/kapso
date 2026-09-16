@@ -346,10 +346,10 @@ def test_transport_error_propagates(monkeypatch, tmp_path):
 
 
 def test_adapter_defaults_follow_manifest(monkeypatch, tmp_path):
-    read_config = api_endpoint.load_config
+    read_config = api_endpoint.load_agent_manifest
 
-    def changed_config(path):
-        manifest = read_config(path)
+    def changed_config():
+        manifest = read_config()
         manifest["agents"]["openai_compatible"]["agent_specific"].update(
             {
                 "max_output_tokens": 321,
@@ -359,7 +359,7 @@ def test_adapter_defaults_follow_manifest(monkeypatch, tmp_path):
         )
         return manifest
 
-    monkeypatch.setattr(api_endpoint, "load_config", changed_config)
+    monkeypatch.setattr(api_endpoint, "load_agent_manifest", changed_config)
     agent = make_agent(monkeypatch, tmp_path, allow_missing_api_key=True)
     agent.generate_code("test")
     call = agent._client.chat.completions.calls[-1]
