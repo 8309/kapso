@@ -34,6 +34,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from kapso.core.config import deep_merge, load_config
+from kapso.core.api_endpoint import (
+    openai_compatible_options,
+    validate_api_base_url,
+)
 from kapso.gated_mcp.presets import GATES, resolve_gates
 from kapso.learning.bank_remote import bank_origin, bank_remote_error
 
@@ -320,24 +324,28 @@ def cli_requirements(specs: Sequence[SessionSpec]) -> List[Requirement]:
             credentials = {}
             for session in cli_specs:
                 names = info.get("env_vars") or []
+                endpoint = ""
                 if cli == "openai_compatible":
-                    options = session.agent_specific
-                    key_env = options.get("api_key_env", "OPENAI_API_KEY")
+                    options = openai_compatible_options(session.agent_specific)
+                    endpoint = validate_api_base_url(options["base_url"])
+                    key_env = options["api_key_env"]
                     if not isinstance(key_env, str) or not key_env.strip():
                         raise ValueError(
                             "api_key_env must name an environment variable"
                         )
                     names = (
                         []
-                        if options.get("allow_missing_api_key")
+                        if options["allow_missing_api_key"]
                         else [key_env.strip()]
                     )
                 for name in names:
-                    credentials.setdefault(name, []).append(session)
-            for name, sessions in credentials.items():
+                    credentials.setdefault((name, endpoint), []).append(
+                        session
+                    )
+            for (name, endpoint), sessions in credentials.items():
                 requirements.append(
                     Requirement(
-                        label=name,
+                        label=f"{name} ({endpoint})" if endpoint else name,
                         ok=bool(os.environ.get(name)),
                         fix=f"add {name}=... to .env in this directory",
                         origin=summarize_origins(sessions),
@@ -405,9 +413,14 @@ def _mode_block(config: Dict[str, Any], mode: Optional[str]) -> Tuple[str, Dict]
     return name, (config.get("modes") or {}).get(name) or {}
 
 
-def _embedding_requirement(origin: str) -> Requirement:
+def _embedding_requirement(origin: str, params=None) -> Requirement:
+    endpoint = validate_api_base_url(
+        (params or {}).get(
+            "embedding_base_url", openai_compatible_options()["base_url"]
+        )
+    )
     return Requirement(
-        label="OPENAI_API_KEY (embeddings)",
+        label=f"OPENAI_API_KEY (embeddings: {endpoint})",
         ok=bool(os.environ.get("OPENAI_API_KEY")),
         fix="add OPENAI_API_KEY=sk-... to .env in this directory",
         origin=origin,
@@ -510,7 +523,8 @@ def learn_knowledge_requirements(
     ))
     if not skip_merge:
         requirements.append(_embedding_requirement(
-            "the merge embeds every wiki page"
+            "the merge embeds every wiki page",
+            (block.get("knowledge_search") or {}).get("params"),
         ))
         requirements.extend(_kg_backend_requirements(
             "the merge writes pages into the KG stores "
@@ -565,7 +579,8 @@ def evolve_requirements(
 
     if kg_index:
         requirements.append(_embedding_requirement(
-            f"knowledge search — Kapso(kg_index={kg_index!r})"
+            f"knowledge search — Kapso(kg_index={kg_index!r})",
+            (block.get("knowledge_search") or {}).get("params"),
         ))
         requirements.extend(_kg_backend_requirements(
             f"knowledge search — Kapso(kg_index={kg_index!r})"

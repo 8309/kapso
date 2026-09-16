@@ -63,7 +63,11 @@ from kapso.learning.trajectory_store import TrajectoryStore
 
 
 # Available coding agents
-AVAILABLE_AGENTS = CodingAgentFactory.list_available()
+AVAILABLE_AGENTS = [
+    name
+    for name in CodingAgentFactory.list_available()
+    if not CodingAgentFactory.get_agent_info(name).get("inference_only", False)
+]
 
 # Available deploy strategies
 DEPLOY_STRATEGIES = ["auto", "local", "docker", "modal", "bentoml", "langgraph"]

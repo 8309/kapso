@@ -244,31 +244,11 @@ Path("kapso-config.yaml").write_text(crews)
 kapso = Kapso(config_path="kapso-config.yaml")
 ```
 
-For text-only inference such as knowledge-search reranking, you can opt in
-to an OpenAI-compatible Chat Completions endpoint for an individual role.
-In a copy of the packaged `config.yaml`, add the following role override
-under `inference` (keep the other sections, including `modes`):
-
-```yaml
-inference:
-  roles:
-    kg_rerank:
-      cli: openai_compatible
-      model: deepseek-flash
-      timeout_seconds: 900
-      agent_specific:
-        base_url: https://api.deepseek.com
-        api_key_env: DEEPSEEK_API_KEY
-```
-
-Save the complete config as `kapso-config.yaml` and pass
-`Kapso(config_path="kapso-config.yaml")` or
-`kapso evolve --config kapso-config.yaml --goal "..."`.
-The endpoint must support the selected model and request parameters.
-This changes only the selected inference role. `GENERIC` ideation and
-implementation still use their configured CLI sessions; web research also
-needs a web-capable agent. See the [coding-agent guide](docs/evolve/coding-agents.mdx)
-for local endpoints, request settings, and the adapter's file-generation limits.
+Text-only inference roles can opt in to `openai_compatible` Chat Completions.
+Set the model and endpoint in your config; credentials stay in the environment.
+Load the config with `Kapso(config_path=...)` or `kapso evolve --config ...`.
+Coding and web research still require agents with the corresponding tools.
+See the [configuration example and limits](docs/evolve/coding-agents.mdx#openai-compatible-api).
 
 Before a long run, probe every model your config names against your
 actual subscriptions — a model your login cannot serve fails here in

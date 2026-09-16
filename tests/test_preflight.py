@@ -103,14 +103,17 @@ def test_skip_merge_drops_the_merger_and_both_kg_stores(packaged, full_machine):
     merging = labels(requirements_for("learn_knowledge", packaged, skip_merge=False))
     assert "Weaviate (localhost:8080)" in merging
     assert "Neo4j (localhost:7687)" in merging
-    assert "OPENAI_API_KEY (embeddings)" in merging
+    assert "OPENAI_API_KEY (embeddings: https://api.openai.com/v1)" in merging
 
     extract_only = labels(
         requirements_for("learn_knowledge", packaged, skip_merge=True)
     )
     assert "Weaviate (localhost:8080)" not in extract_only
     assert "Neo4j (localhost:7687)" not in extract_only
-    assert "OPENAI_API_KEY (embeddings)" not in extract_only
+    assert (
+        "OPENAI_API_KEY (embeddings: https://api.openai.com/v1)"
+        not in extract_only
+    )
 
 
 def test_codify_target_decides_whether_gcloud_is_required(packaged, full_machine):
@@ -134,7 +137,9 @@ def test_kg_rows_appear_only_when_an_index_is_connected(packaged, full_machine):
         requirements_for("evolve", packaged, kg_index="data/indexes/ml.index")
     )
     assert "Neo4j (localhost:7687)" in with_index
-    assert "OPENAI_API_KEY (embeddings)" in with_index
+    assert (
+        "OPENAI_API_KEY (embeddings: https://api.openai.com/v1)" in with_index
+    )
 
 
 def test_caller_passed_coding_agent_overrides_the_mode(packaged, full_machine):
@@ -518,10 +523,10 @@ def test_api_agent_checks_configured_keys_per_session(monkeypatch):
     found = {r.label: r for r in preflight.cli_requirements(specs)}
     assert "OPENAI_API_KEY" not in found
     assert "node" not in found
-    assert found["PROVIDER_KEY"].ok
+    assert found["PROVIDER_KEY (https://api.openai.com/v1)"].ok
     monkeypatch.delenv("PROVIDER_KEY")
     found = {r.label: r for r in preflight.cli_requirements(specs)}
-    assert not found["PROVIDER_KEY"].ok
+    assert not found["PROVIDER_KEY (https://api.openai.com/v1)"].ok
 
 
 def test_research_preflight_inherits_nested_api_options(monkeypatch):
@@ -537,7 +542,7 @@ def test_research_preflight_inherits_nested_api_options(monkeypatch):
         }
     }
     found = {r.label: r for r in preflight.research_requirements(config)}
-    assert found["PROVIDER_KEY"].ok
+    assert found["PROVIDER_KEY (https://api.openai.com/v1)"].ok
     assert "OPENAI_API_KEY" not in found
 
 
@@ -572,5 +577,43 @@ def test_evolve_checks_api_inference_role_key(
             kg_index="my-index",
         )
     }
-    assert not found["RERANK_KEY"].ok
-    assert "inference.roles.kg_rerank" in found["RERANK_KEY"].origin
+    assert not found["RERANK_KEY (https://api.openai.com/v1)"].ok
+    assert "inference.roles.kg_rerank" in found[
+        "RERANK_KEY (https://api.openai.com/v1)"
+    ].origin
+
+
+def test_doctor_keeps_endpoints_separate_for_the_same_key(monkeypatch):
+    monkeypatch.setenv("PROVIDER_KEY", "secret-not-for-display")
+    specs = [preflight.SessionSpec(
+        cli="openai_compatible", model="m", origin="inference.roles." + role,
+        agent_specific={"base_url": endpoint, "api_key_env": "PROVIDER_KEY"},
+    ) for role, endpoint in [
+        ("kg_rerank", "https://first.test/v1"),
+        ("repo_memory", "https://second.test/v1"),
+    ]]
+    rows = preflight.dedupe(preflight.cli_requirements(specs))
+    labels = [row.label for row in rows]
+    assert "PROVIDER_KEY (https://first.test/v1)" in labels
+    assert "PROVIDER_KEY (https://second.test/v1)" in labels
+    assert "secret-not-for-display" not in repr(rows)
+
+
+def test_preflight_rejects_plaintext_inference_endpoint():
+    spec = preflight.SessionSpec(
+        cli="openai_compatible", model="m", origin="inference.default",
+        agent_specific={"base_url": "http://remote.test/v1"},
+    )
+    with pytest.raises(ValueError, match="HTTPS"):
+        preflight.cli_requirements([spec])
+
+
+def test_preflight_uses_embedding_endpoint_from_config(packaged, full_machine):
+    mode = packaged["default_mode"]
+    packaged["modes"][mode]["knowledge_search"]["params"] = {
+        "embedding_base_url": "https://embeddings.test/v1",
+    }
+    rows = requirements_for("evolve", packaged, kg_index="my-index")
+    assert any(row.label ==
+               "OPENAI_API_KEY (embeddings: https://embeddings.test/v1)"
+               for row in rows)

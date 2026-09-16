@@ -119,7 +119,6 @@ class CliInference:
                     "openai_compatible does not provide web search; configure "
                     "inference.roles.research with a web-capable CLI agent"
                 )
-            agent_specific["read_only"] = True
         elif spec["cli"] == "claude_code":
             agent_specific.setdefault(
                 "auth_mode", spec.get("auth_mode", "oauth")

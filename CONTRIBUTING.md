@@ -41,8 +41,6 @@ where you run Kapso; it is loaded from the current working directory.
 ```bash
 # Embeddings used by memory and knowledge search
 OPENAI_API_KEY=your-openai-api-key
-# Optional base URL for OpenAI-compatible embeddings
-OPENAI_BASE_URL=https://api.example.com/v1
 
 # Direct API-backed agents, when selected
 GOOGLE_API_KEY=your-google-api-key

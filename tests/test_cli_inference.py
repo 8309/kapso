@@ -9,6 +9,7 @@ sessions, the codex web-search flag, and cost aggregation across the
 CLI sessions plus the delegated embedding backend.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -240,7 +241,7 @@ def test_non_mapping_inference_block_raises(tmp_path):
         resolve_inference_config(str(user_config))
 
 
-def test_api_role_preserves_endpoint_options_and_forces_read_only():
+def test_api_role_preserves_endpoint_options():
     factory = FakeFactory()
     backend = cli(
         factory,
@@ -252,7 +253,6 @@ def test_api_role_preserves_endpoint_options_and_forces_read_only():
                 "agent_specific": {
                     "base_url": "https://provider.test/v1",
                     "api_key_env": "PROVIDER_KEY",
-                    "read_only": False,
                     "temperature": 0.1,
                 },
             },
@@ -264,7 +264,7 @@ def test_api_role_preserves_endpoint_options_and_forces_read_only():
     assert options["base_url"] == "https://provider.test/v1"
     assert options["api_key_env"] == "PROVIDER_KEY"
     assert options["temperature"] == 0.3
-    assert options["read_only"] is True
+    assert "read_only" not in options
     assert (
         backend._inference["default"]["agent_specific"]["temperature"] == 0.1
     )
@@ -289,8 +289,6 @@ def test_api_web_search_fails_before_creating_agent():
 
 
 def test_failed_session_cleans_client_and_scratch(monkeypatch):
-    from pathlib import Path
-
     factory = FakeFactory()
 
     def fail(self, prompt, timeout_seconds=None):

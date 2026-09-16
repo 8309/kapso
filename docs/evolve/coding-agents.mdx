@@ -188,11 +188,6 @@ endpoints, including compatible hosted providers and local servers. It uses
 the existing `openai` dependency and does not require a CLI login itself.
 Provider and model support for individual request fields varies.
 
-A live smoke test on 2026-09-12 verified text inference and single-file
-generation against `https://api.deepseek.com` using `deepseek-flash`
-(DeepSeek V4.1 Flash). Both requests returned HTTP 200; the generated
-`hello.py` executed successfully. This does not validate a full campaign.
-
 ### Text-only inference
 
 Configure a role whose entire context is supplied in its prompt, such as
@@ -230,16 +225,18 @@ need filesystem or web tools on a capable agent.
 
 ### Endpoint and request settings
 
-`base_url` defaults to `OPENAI_BASE_URL`, then the legacy `OPENAI_API_BASE`,
-then the official OpenAI endpoint. `base_url_env` optionally selects another
-environment variable. Prefer a per-agent `base_url` when chat and embeddings
-use different providers; the global `OPENAI_BASE_URL` also affects OpenAI SDK
-embedding clients. An embedding endpoint must support the configured embedding model.
+`base_url` comes only from config. Its default, the official OpenAI endpoint,
+is defined in `agents.yaml`; shell variables cannot override it. Use HTTPS:
+HTTP is accepted only for loopback hosts (`localhost`, `127.0.0.0/8`, or `::1`).
+The KG graph-search embeddings client likewise uses a config-only endpoint;
+set `knowledge_search.params.embedding_base_url` in the active mode when
+embeddings need a different provider. That endpoint must support the
+configured embedding model.
 
 `api_key_env` defaults to `OPENAI_API_KEY`. For an unauthenticated local
 server, set `base_url: http://localhost:8000/v1` and
-`allow_missing_api_key: true`. Preflight checks the configured key rather
-than requiring `OPENAI_API_KEY` for every adapter. `doctor --models` currently
+`allow_missing_api_key: true`. Preflight prints the configured endpoint beside
+the key it checks. `doctor --models` currently
 live-probes CLI models only; it does not verify this endpoint's model access.
 
 `max_output_tokens` is sent as `max_tokens` by default. For models requiring
@@ -263,41 +260,12 @@ SDK retries are disabled so a failed request does not silently multiply this
 request timeout. Token usage is returned in metadata; monetary cost tracking
 is unavailable, so do not rely on Kapso's cost budget to cap provider charges.
 
-### File generation through the factory
-
-For callers using `CodingAgentFactory`, the adapter can generate complete
-files from context provided in the prompt:
-
-```python
-from kapso.execution.coding_agents.factory import CodingAgentFactory
-
-config = CodingAgentFactory.build_config(
-    agent_type="openai_compatible",
-    model="deepseek-flash",
-    debug_model="deepseek-flash",
-    agent_specific={
-        "base_url": "https://api.deepseek.com",
-        "api_key_env": "DEEPSEEK_API_KEY",
-    },
-)
-agent = CodingAgentFactory.create(config)
-try:
-    agent.initialize("./workspace")
-    result = agent.generate_code("Create hello.py that prints hello.")
-    if not result.success:
-        raise RuntimeError(result.error)
-finally:
-    agent.cleanup()
-```
-
-The model must return complete `<<<FILE: relative/path>>>` / `<<<END FILE>>>`
-blocks. Paths and block completeness are validated before writing; paths
-outside the workspace, `.git` writes (including symlink aliases), duplicate
-paths, and truncated completions are rejected. Ordinary Markdown fences are
-never treated as edits. This is one request per call: the adapter cannot read
-existing files, execute shell commands, use MCP tools, resume sessions, or
-verify evaluation results. Supply existing code in the prompt when editing,
-and run evaluation separately. Git commits remain the caller's responsibility.
+The adapter is registered for `CliInference` with `inference_only: true` in
+`agents.yaml`. It is excluded from both `evolve -a` and
+`deploy --coding-agent` choices. It cannot read or write workspace files,
+execute commands, use tools, or verify evaluation results; all context must
+be supplied in the prompt. Provider and transport errors propagate; empty,
+incomplete, or tool-call responses return a failed result.
 
 ## CodingResult
 

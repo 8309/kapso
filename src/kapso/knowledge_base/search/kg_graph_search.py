@@ -14,7 +14,6 @@
 #
 # Environment Variables:
 # - OPENAI_API_KEY: For text-embedding-3-large (or the configured model)
-# - OPENAI_BASE_URL: Optional OpenAI-compatible API endpoint
 # - NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD: Graph database
 # - WEAVIATE_URL: Vector database (default: http://localhost:8080)
 
@@ -62,6 +61,10 @@ from kapso.knowledge_base.search.base import (
 )
 from kapso.knowledge_base.search.factory import register_knowledge_search
 from kapso.core.cli_inference import CliInference
+from kapso.core.api_endpoint import (
+    openai_compatible_options,
+    validate_api_base_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -652,23 +655,17 @@ class KGGraphSearch(KnowledgeSearch):
             logger.warning("openai package not installed.")
             return
             
-        try:
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                logger.warning("OPENAI_API_KEY not set. Embeddings disabled.")
-                return
-            
-            client_options = {"api_key": api_key}
-            base_url = os.getenv("OPENAI_BASE_URL") or os.getenv(
-                "OPENAI_API_BASE"
+        base_url = validate_api_base_url(
+            self.params.get(
+                "embedding_base_url", openai_compatible_options()["base_url"]
             )
-            if base_url:
-                client_options["base_url"] = base_url
-            self._openai_client = OpenAI(**client_options)
-            logger.info("OpenAI client initialized")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize OpenAI: {e}")
+        )
+        if not os.getenv("OPENAI_API_KEY"):
+            logger.warning("OPENAI_API_KEY not set. Embeddings disabled.")
+            return
+        # Pass a config URL explicitly so the SDK cannot select an env URL.
+        self._openai_client = OpenAI(base_url=base_url)
+        logger.info("OpenAI embeddings client initialized at %s", base_url)
     
     def _initialize_llm(self) -> None:
         """Initialize LLM backend for reranking."""
