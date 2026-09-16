@@ -217,6 +217,7 @@ knowledge_search:
 | `type` | `kg_graph_search` for hybrid vector and graph search, or `kg_llm_navigation` |
 | `enabled` | Whether campaigns query the knowledge graph. `MINIMAL` ships this `false` |
 | `preset` | Named retrieval preset |
+| `params.embedding_base_url` | Config-only endpoint for `kg_graph_search` embeddings. Defaults to the OpenAI URL in `agents.yaml`; environment URL overrides are ignored. Requires HTTPS, except for loopback hosts. |
 
 See [Search backends](/docs/knowledge/search-backends).
 
